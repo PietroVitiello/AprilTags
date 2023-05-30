@@ -1,0 +1,8 @@
+env/*
+pose_estimation_0
+pose_estimation_1
+pose_estimation_2
+__pycache__
+
+rel_pose_dataset_debug.py
+**/*.pth
