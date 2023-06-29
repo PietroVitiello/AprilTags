@@ -8,7 +8,6 @@ import torch.nn as nn
 import numpy as np
 
 from torchvision.transforms.functional import crop as crop_f, resize, to_pil_image
-import cv2
 
 from .OwlViT import OWL_ViT
 from segment_anything import build_sam, SamPredictor
@@ -27,40 +26,6 @@ class OWL_SAM(nn.Module):
     
     def detect_object(self, x: dict):
         return self.detector(x)
-    
-    def subpart_suppression(self, masks, threshold=0.2):
-        # For any pair of objects, if (subpart_threshold) of one is inside the other, keep the other.
-        remove_idxs = []
-        for i in range(len(masks)):
-            curr_mask = masks[i]
-            curr_area = curr_mask.sum()
-            for j in range(i + 1, len(masks)):
-                other_mask = masks[j]
-                other_area = other_mask.sum()
-                intersection = (curr_mask & other_mask).sum()
-                if intersection / curr_area > threshold or intersection / other_area > threshold:
-                    # Remove the smaller one.
-                    smaller_area_idx = i if curr_area < other_area else j
-                    remove_idxs.append(smaller_area_idx)
-
-        keep_idxs = [i for i in range(len(masks)) if i not in remove_idxs]
-        masks = [masks[i] for i in keep_idxs]
-        return masks
-
-    def large_obj_suppression(self, masks, img, threshold=0.3):
-        img_area = img.shape[0] * img.shape[1]
-        masks = [mask for mask in masks if mask.sum() / img_area <= threshold]
-        return masks
-
-    def small_obj_suppression(self, masks, img, threshold=0.005):
-        img_area = img.shape[0] * img.shape[1]
-        masks = [mask for mask in masks if mask.sum() / img_area >= threshold]
-        return masks
-
-    # Keeps only masks which are connected components (no multiple islands).
-    def disconnected_components_suppression(self, masks):
-        masks = [mask for mask in masks if cv2.connectedComponents(mask.cpu().numpy().astype(np.uint8))[0] == 2]
-        return masks
 
     def forward(self, x: dict):
         bbox = self.detect_object(x)
@@ -71,18 +36,13 @@ class OWL_SAM(nn.Module):
         for image_id in range(images.shape[0]):
             self.segmentator.set_image(images[image_id])
             transformed_boxes = self.segmentator.transform.apply_boxes_torch(bbox, images.shape[1:3])
-            masks_output, _, _ = self.segmentator.predict_torch(
+            mask, _, _ = self.segmentator.predict_torch(
                 point_coords = None,
                 point_labels = None,
                 boxes = transformed_boxes,
-                multimask_output = True,
+                multimask_output = False,
             )
-            print(masks_output.shape)
-            masks_output = self.disconnected_components_suppression(masks_output[image_id])
-            masks_output = self.large_obj_suppression(masks_output, images[image_id]) # To remove bground obj.
-            masks_output = self.subpart_suppression(masks_output)
-            # masks_output = self.small_obj_suppression(masks_output, images[image_id]) # To remove small objs which cannot be grasped anyway.
-            masks[image_id,:,:] = masks_output[0].cpu().numpy()
+            masks[image_id,:,:] = mask.cpu().numpy()
         
         if masks.shape[0] == 1:
             return masks[0]
